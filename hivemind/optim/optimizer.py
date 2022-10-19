@@ -310,6 +310,7 @@ class Optimizer(torch.optim.Optimizer):
             client_mode=self.client_mode,
             auxiliary=self.auxiliary,
             start=True,
+            target_batch_size=self.tracker.target_batch_size,
             **kwargs,
         )
         if self.offload_optimizer:

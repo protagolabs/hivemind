@@ -107,34 +107,35 @@ class DecentralizedAverager(mp.Process, ServicerBase):
     serializer = MSGPackSerializer
 
     def __init__(
-        self,
-        averaged_tensors: Sequence[torch.Tensor],
-        dht: DHT,
-        *,
-        start: bool,
-        prefix: str,
-        target_group_size: Optional[int] = None,
-        min_group_size: int = 2,
-        initial_group_bits: str = "",
-        min_matchmaking_time: float = 5.0,
-        request_timeout: float = 3.0,
-        averaging_alpha: float = 1.0,
-        part_size_bytes: int = DEFAULT_PART_SIZE_BYTES,
-        allreduce_timeout: Optional[float] = None,
-        next_chunk_timeout: Optional[float] = None,
-        sender_timeout: Optional[float] = None,
-        reducer_timeout: Optional[float] = None,
-        compression: CompressionBase = NoCompression(),
-        state_compression: CompressionBase = NoCompression(),
-        tensor_infos: Optional[Sequence[CompressionInfo]] = None,
-        bandwidth: Optional[float] = None,
-        min_vector_size: int = 0,
-        auxiliary: bool = False,
-        allow_state_sharing: Optional[bool] = None,
-        declare_state_period: float = 30,
-        client_mode: Optional[bool] = None,
-        daemon: bool = True,
-        shutdown_timeout: float = 5,
+            self,
+            averaged_tensors: Sequence[torch.Tensor],
+            dht: DHT,
+            *,
+            start: bool,
+            prefix: str,
+            target_group_size: Optional[int] = None,
+            min_group_size: int = 2,
+            initial_group_bits: str = "",
+            min_matchmaking_time: float = 5.0,
+            request_timeout: float = 3.0,
+            averaging_alpha: float = 1.0,
+            part_size_bytes: int = DEFAULT_PART_SIZE_BYTES,
+            allreduce_timeout: Optional[float] = None,
+            next_chunk_timeout: Optional[float] = None,
+            sender_timeout: Optional[float] = None,
+            reducer_timeout: Optional[float] = None,
+            compression: CompressionBase = NoCompression(),
+            state_compression: CompressionBase = NoCompression(),
+            tensor_infos: Optional[Sequence[CompressionInfo]] = None,
+            bandwidth: Optional[float] = None,
+            min_vector_size: int = 0,
+            auxiliary: bool = False,
+            allow_state_sharing: Optional[bool] = None,
+            declare_state_period: float = 30,
+            client_mode: Optional[bool] = None,
+            daemon: bool = True,
+            shutdown_timeout: float = 5,
+            target_batch_size: int = 0
     ):
         assert "." not in prefix, "group prefix must be a string without trailing '.'"
         assert bandwidth is None or (
@@ -142,7 +143,7 @@ class DecentralizedAverager(mp.Process, ServicerBase):
         ), "bandwidth must be a non-negative float32"
         assert all(bit in "01" for bit in initial_group_bits)
         assert not client_mode or not auxiliary, "auxiliary peers must accept incoming connections"
-
+        self.target_batch_size = target_batch_size
         super().__init__()
         self.dht = dht
         self.prefix = prefix
@@ -425,7 +426,7 @@ class DecentralizedAverager(mp.Process, ServicerBase):
                 group_info = await self._matchmaking.look_for_group(step)
                 if not step.triggered:
                     step.stage = AveragingStage.AWAITING_TRIGGER
-                    await step.wait_for_trigger()
+                    await step.wait_for_trigger()  # here
                 return group_info
 
             while not step.done():
@@ -544,6 +545,7 @@ class DecentralizedAverager(mp.Process, ServicerBase):
             tensors=tensors,
             group_id=group_id,
             ordered_peer_ids=group_info.peer_ids,
+            target_batch_size=self.target_batch_size,
             **kwargs,
         )
         assert group_id in self._running_groups, f"Group id {group_id} was not registered in _register_allreduce_group"
@@ -557,6 +559,13 @@ class DecentralizedAverager(mp.Process, ServicerBase):
         else:
             async for _ in runner:
                 raise ValueError("aux peers should not receive averaged tensors")
+        if kwargs.get("tensor_infos") is None:
+            await self.dispense_bonus(runner.bonus_dict)
+
+    async def dispense_bonus(self, bonus_dict: Dict[str:int]):
+        print("result:", bonus_dict)
+        # web3 api here
+        pass
 
     @contextlib.contextmanager
     def get_tensors(self) -> Sequence[torch.Tensor]:

@@ -4,7 +4,8 @@ from typing import AsyncIterator, Optional, Sequence, Set, Tuple, Type
 
 import torch
 
-from hivemind.averaging.partition import AllreduceException, BannedException, TensorPartContainer, TensorPartReducer
+from hivemind.averaging.partition import AllreduceException, BannedException, TensorPartContainer, TensorPartReducer, \
+    TensorIllegalException
 from hivemind.compression import deserialize_torch_tensor, serialize_torch_tensor
 from hivemind.p2p import P2P, P2PContext, PeerID, ServicerBase, StubBase
 from hivemind.proto import averaging_pb2
@@ -21,7 +22,8 @@ from hivemind.utils.asyncio import (
 # flavour types
 GroupID = bytes
 logger = get_logger(__name__)
-
+WEIGHT_MAX_RATIO = 1.5
+WEIGHT_WARNING_RATIO = 1.1
 
 class AveragingMode(Enum):
     NODE = 0
@@ -74,6 +76,7 @@ class AllReduceRunner(ServicerBase):
         modes: Optional[Sequence[AveragingMode]] = None,
         sender_timeout: Optional[float] = None,
         reducer_timeout: Optional[float] = None,
+        target_batch_size: int = 0,
         **kwargs,
     ):
         self._p2p = p2p
@@ -128,6 +131,8 @@ class AllReduceRunner(ServicerBase):
             tuple(part.shape for part in self.parts_for_local_averaging),
             len(self.sender_peer_ids),
         )
+        self.bonus_dict = {peer_id: 0 for peer_id in self.sender_peer_ids}
+        self.target_batch_size = target_batch_size
 
     def __repr__(self):
         return f"{self.__class__.__name__}({self.peer_id}, group_size={self.group_size})"
@@ -201,11 +206,12 @@ class AllReduceRunner(ServicerBase):
     async def _communicate_with_peer(self, peer_id: PeerID):
         """Send a part of local tensors and metadata to a single peer, receive the average for that part of tensors"""
         peer_index = self.ordered_peer_ids.index(peer_id)
+        # client mode do not have this situation: peer_id == self.peer_id
         if peer_id == self.peer_id:
             sender_index = self.sender_peer_ids.index(peer_id)
             for part_index, tensor_part in enumerate(self.parts_for_local_averaging):
                 averaged_part = await self.tensor_part_reducer.accumulate_part(
-                    sender_index, part_index, tensor_part, weight=self.weight
+                    sender_index, part_index, tensor_part, weight=self.weight, is_standard=True
                 )
                 self.tensor_part_container.register_processed_part(peer_index, part_index, averaged_part - tensor_part)
 
@@ -261,6 +267,7 @@ class AllReduceRunner(ServicerBase):
     ) -> AsyncIterator[averaging_pb2.AveragingData]:
         """a peer sends us a part of his tensor; we should average it with other peers and return the difference"""
         sender_index = self.sender_peer_ids.index(context.remote_id)
+        # context.remote_id == p2pid
         self.active_senders.add(context.remote_id)
         if len(self.active_senders) == len(self.sender_peer_ids):
             self.all_senders_started.set()
@@ -336,11 +343,17 @@ class AllReduceRunner(ServicerBase):
         part_index = 0
         try:
             loop = asyncio.get_event_loop()
-            async for tensor_part, weight, part_compression in amap_in_executor(
-                lambda msg: (deserialize_torch_tensor(msg.tensor_part), msg.weight, msg.tensor_part.compression),
-                stream,
-                max_prefetch=self.tensor_part_container.prefetch,
+            peer_id_index = self.ordered_peer_ids.index(self.peer_id)
+            averaged_part_num = self.tensor_part_container.num_parts_by_peer[peer_id_index]
+            async for tensor_part, weight, code, part_compression in amap_in_executor(
+                    lambda msg: (
+                    deserialize_torch_tensor(msg.tensor_part), msg.weight, msg.code, msg.tensor_part.compression),
+                    stream,
+                    max_prefetch=self.tensor_part_container.prefetch,
             ):
+                # self.peer_id : our p2p id ; self.sender_peer_ids[sender_index]: sender's p2p id
+                if int(weight) != 1:
+                    self.ensure_weight_legal(weight,self.sender_peer_ids[sender_index])
                 try:
                     averaged_part = await self.tensor_part_reducer.accumulate_part(
                         sender_index, part_index, tensor_part, weight=weight
@@ -349,7 +362,12 @@ class AllReduceRunner(ServicerBase):
                 except BannedException:
                     logger.debug(f"Sender {sender_index} is already banned")
                     break  # sender was banned, we no longer need to aggregate it
-
+                # print("delta：",(averaged_part - tensor_part).mean(),(averaged_part-tensor_part))
+                except TensorIllegalException:
+                    logger.warning(f"peer id: {self.sender_peer_ids[sender_index]} send us an illegal grad, weight:{weight}")
+                    break
+                if int(weight) != 1 and part_index == averaged_part_num-1:
+                    self.bonus_dict[self.sender_peer_ids[sender_index]] += int(weight)
                 serialized_delta = await loop.run_in_executor(
                     None, lambda: serialize_torch_tensor(averaged_part - tensor_part, part_compression)
                 )
@@ -357,6 +375,19 @@ class AllReduceRunner(ServicerBase):
         finally:
             if part_index != self.tensor_part_reducer.num_parts:
                 await self._ban_sender(self.sender_peer_ids[sender_index])
+
+
+
+    def ensure_weight_legal(self,weight,peer_p2p_id):
+        if weight >= self.target_batch_size * WEIGHT_MAX_RATIO - self.weight:
+            print(f"weight > total weight   target:{self.target_batch_size}, weight:{self.weight}")
+            raise TensorIllegalException
+        elif weight >= self.target_batch_size * WEIGHT_WARNING_RATIO - self.weight:
+            logger.warning(f"{peer_p2p_id} give us a very high weight")
+        # averaged_weight = self.weight/len(self.sender_peer_ids)
+        # elif weight >= averaged_weight + (self.weight - averaged_weight) * WEIGHT_MAX_RATIO:
+        #     print("weight > 90%")
+        #     raise TensorIllegalException
 
     def finalize(self, *, cancel: bool = False, exception: Optional[BaseException] = None):
         """finish or terminate AllReduceRunner, propagate any errors / cancellations to peers."""

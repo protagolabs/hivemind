@@ -13,7 +13,8 @@ from hivemind.proto import runtime_pb2
 from hivemind.utils import amap_in_executor, as_aiter, get_logger
 
 T = TypeVar("T")
-DEFAULT_PART_SIZE_BYTES = 2**19
+DEFAULT_PART_SIZE_BYTES = 2 ** 19
+DEFAULT_ALLOWED_GRAD_BIAS = 10
 logger = get_logger(__name__)
 
 
@@ -67,6 +68,7 @@ class TensorPartContainer:
         pivots[-1] = self.total_size
 
         for tensor, info in zip(self.local_tensors, self.tensor_infos):
+            # float 16 as example: bytes_per_value=4*0.5=2
             bytes_per_value = tensor.element_size() * compression.estimate_compression_ratio(info)
             part_size_values = int(part_size_bytes / bytes_per_value)
             tensor_parts = tensor.detach().view(-1).split(part_size_values)
@@ -190,6 +192,7 @@ class TensorPartReducer:
         self.accumulator = None  # this will contain the sum of current tensor part from group peers
         self.denominator = 0.0  # total weight accumulated from all peers for current part
         self.current_part_future = asyncio.Future()
+        self.standard_future = asyncio.Future()
         self.finished = asyncio.Event()
 
         self.num_parts_received = [0 for _ in range(self.num_senders)]
@@ -207,6 +210,7 @@ class TensorPartReducer:
 
         self.current_part_index += 1
         self.current_part_accumulated_from = 0
+        self.standard_future = asyncio.Future()
         self.current_part_future = asyncio.Future()
         self.num_current_senders = sum(
             self.current_part_index < failed_index for failed_index in self.sender_failed_after
@@ -214,10 +218,24 @@ class TensorPartReducer:
         self.accumulator = torch.zeros(self.part_shapes[self.current_part_index])
         self.denominator = 0.0
 
+    async def is_legal(self, tensor_part) -> bool:
+        await self.standard_future  # make sure local tensor have been added to accumulator
+        if not torch.equal(torch.zeros(self.accumulator.shape), self.accumulator):
+            tensor_bias_norm = torch.norm((tensor_part - torch.div(self.accumulator, self.denominator)))
+            if tensor_bias_norm >= DEFAULT_ALLOWED_GRAD_BIAS:
+                logger.exception(f"find an illegal tensor, norm bias: {tensor_bias_norm}")
+                return False
+        else:
+            print("accumulator is zero... 【this is not supposed to be seen】")
+        return True
+
     async def accumulate_part(
-        self, sender_index: int, part_index: int, tensor_part: torch.Tensor, weight: float = 1.0
+            self, sender_index: int, part_index: int, tensor_part: torch.Tensor, weight: float = 1.0, is_standard=False
     ) -> torch.Tensor:
         """Add vector part to accumulator, wait for all other vectors to be added, then return the average part"""
+        if weight != 1.0 and not is_standard and not await self.is_legal(tensor_part):
+            raise TensorIllegalException(f"sender {sender_index} give us an  illegal tensor")
+
         assert 0 <= sender_index < self.num_senders, "invalid sender index"
         assert 0 <= part_index < self.num_parts, "invalid part index"
         self.num_parts_received[sender_index] += 1
@@ -238,6 +256,8 @@ class TensorPartReducer:
             self.accumulator.add_(tensor_part, alpha=weight)
             self.current_part_accumulated_from += 1
             self.denominator += weight
+            if weight != 1.0 and is_standard:
+                self.standard_future.set_result(True)
             self.check_current_part_finished()
         return await current_part_future
 
@@ -279,3 +299,6 @@ class AllreduceException(Exception):
 
 class BannedException(AllreduceException):
     """An exception that indicates that a given sender was banned and will no longer be aggregated"""
+
+class TensorIllegalException(AllreduceException):
+    """An exception that indicates that sender send us an illegal tensor"""
