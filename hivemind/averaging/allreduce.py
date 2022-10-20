@@ -1,4 +1,5 @@
 import asyncio
+import os
 from enum import Enum
 from typing import AsyncIterator, Optional, Sequence, Set, Tuple, Type
 
@@ -23,7 +24,6 @@ from hivemind.utils.asyncio import (
 GroupID = bytes
 logger = get_logger(__name__)
 WEIGHT_MAX_RATIO = 1.5
-WEIGHT_WARNING_RATIO = 1.1
 
 class AveragingMode(Enum):
     NODE = 0
@@ -345,13 +345,12 @@ class AllReduceRunner(ServicerBase):
             loop = asyncio.get_event_loop()
             peer_id_index = self.ordered_peer_ids.index(self.peer_id)
             averaged_part_num = self.tensor_part_container.num_parts_by_peer[peer_id_index]
-            async for tensor_part, weight, code, part_compression in amap_in_executor(
+            async for tensor_part, weight, part_compression in amap_in_executor(
                     lambda msg: (
-                    deserialize_torch_tensor(msg.tensor_part), msg.weight, msg.code, msg.tensor_part.compression),
+                            deserialize_torch_tensor(msg.tensor_part), msg.weight, msg.tensor_part.compression),
                     stream,
                     max_prefetch=self.tensor_part_container.prefetch,
             ):
-                # self.peer_id : our p2p id ; self.sender_peer_ids[sender_index]: sender's p2p id
                 if int(weight) != 1:
                     self.ensure_weight_legal(weight,self.sender_peer_ids[sender_index])
                 try:
@@ -362,7 +361,6 @@ class AllReduceRunner(ServicerBase):
                 except BannedException:
                     logger.debug(f"Sender {sender_index} is already banned")
                     break  # sender was banned, we no longer need to aggregate it
-                # print("delta：",(averaged_part - tensor_part).mean(),(averaged_part-tensor_part))
                 except TensorIllegalException:
                     logger.warning(f"peer id: {self.sender_peer_ids[sender_index]} send us an illegal grad, weight:{weight}")
                     break
@@ -376,18 +374,17 @@ class AllReduceRunner(ServicerBase):
             if part_index != self.tensor_part_reducer.num_parts:
                 await self._ban_sender(self.sender_peer_ids[sender_index])
 
+    def to_judge(self, weight):
+        # use it when only our node needs verification
+        return True if os.getenv("WANDB_MODE", "") == "online" and int(weight) != 1 else False
 
-
-    def ensure_weight_legal(self,weight,peer_p2p_id):
+    def ensure_weight_legal(self, weight, peer_p2p_id):
         if weight >= self.target_batch_size * WEIGHT_MAX_RATIO - self.weight:
             print(f"weight > total weight   target:{self.target_batch_size}, weight:{self.weight}")
             raise TensorIllegalException
-        elif weight >= self.target_batch_size * WEIGHT_WARNING_RATIO - self.weight:
+        elif weight / 2 >= (self.target_batch_size - self.weight) / (len(self.sender_peer_ids) - 1):
             logger.warning(f"{peer_p2p_id} give us a very high weight")
-        # averaged_weight = self.weight/len(self.sender_peer_ids)
-        # elif weight >= averaged_weight + (self.weight - averaged_weight) * WEIGHT_MAX_RATIO:
-        #     print("weight > 90%")
-        #     raise TensorIllegalException
+
 
     def finalize(self, *, cancel: bool = False, exception: Optional[BaseException] = None):
         """finish or terminate AllReduceRunner, propagate any errors / cancellations to peers."""
