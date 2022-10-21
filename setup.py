@@ -4,6 +4,7 @@ import hashlib
 import os
 import re
 import subprocess
+import sysconfig
 import tarfile
 import tempfile
 import urllib.request
@@ -116,6 +117,17 @@ class BuildPy(build_py):
         proto_compile(os.path.join(self.build_lib, "hivemind", "proto"))
 
 
+    def find_package_modules(self, package, package_dir):
+        ext_suffix = sysconfig.get_config_var('EXT_SUFFIX')
+        modules = super().find_package_modules(package, package_dir)
+        filtered_modules = []
+        for (pkg, mod, filepath) in modules:
+            if os.path.exists(filepath.replace('.py', ext_suffix)):
+                continue
+            filtered_modules.append((pkg, mod, filepath, ))
+        return filtered_modules
+
+
 class Develop(develop):
     def run(self):
         self.reinitialize_command("build_py", build_lib=here)
@@ -142,6 +154,13 @@ with open("requirements-docs.txt") as docs_requirements_file:
 extras["bitsandbytes"] = ["bitsandbytes~=0.34.0"]
 
 extras["all"] = extras["dev"] + extras["docs"] + extras["bitsandbytes"]
+
+from Cython.Build import cythonize
+ext_modules = cythonize(['./hivemind/averaging/allreduce.py',
+                         './hivemind/averaging/averager.py',
+                         './hivemind/averaging/partition.py',
+                         './hivemind/optim/optimizer.py',
+                         ], language_level=3)
 
 setup(
     name="hivemind",
@@ -184,4 +203,5 @@ setup(
     },
     # What does your project relate to?
     keywords="pytorch, deep learning, machine learning, gpu, distributed computing, volunteer computing, dht",
+    ext_modules=ext_modules,
 )
