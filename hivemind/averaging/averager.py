@@ -1,7 +1,4 @@
 """ A background process that averages your tensors with peers """
-
-from __future__ import annotations
-
 import asyncio
 import contextlib
 import ctypes
@@ -13,6 +10,7 @@ import weakref
 from dataclasses import asdict
 from typing import Any, AsyncIterator, Dict, Optional, Sequence, Tuple, Union
 
+import aiohttp
 import numpy as np
 import torch
 
@@ -371,6 +369,7 @@ class DecentralizedAverager(mp.Process, ServicerBase):
         allow_retries: bool = True,
         require_trigger: bool = False,
         wait: bool = True,
+        current_samples: int = 0
     ) -> Union[Optional[Dict[PeerID, GatheredData]], StepControl]:
         """
         Set up the averager to look for a group and run one round of averaging, return True on success, False on failure
@@ -559,13 +558,36 @@ class DecentralizedAverager(mp.Process, ServicerBase):
         else:
             async for _ in runner:
                 raise ValueError("aux peers should not receive averaged tensors")
-        if kwargs.get("tensor_infos") is None:
-            await self.dispense_bonus(runner.bonus_dict)
+        if kwargs.get("tensor_infos") is None and runner.bonus_dict:
+            await self.dispense_bonus(runner.bonus_dict, kwargs.get("weight", 0))
 
-    async def dispense_bonus(self, bonus_dict: Dict[str:int]):
-        print("result:", bonus_dict)
-        # web3 api here
-        pass
+    async def dispense_bonus(self, bonus_dict, server_total):
+        if not os.getenv("WANDB_MODE", ""):
+            return
+        if not self.prefix.split("_") or len(self.prefix.split("_")[0]) != 36:
+            return
+        real_target = server_total
+        percent_map = {}
+        for size in bonus_dict.values():
+            real_target += size
+        percent = {p2pid.to_string(): round(data_size / real_target, 3) for p2pid, data_size in bonus_dict.items() if
+                       data_size > 0}
+        percent_map["action"] = "dispense"
+        percent_map["standard_data_size"] = server_total
+        percent_map["job_id"] = self.prefix.split("_")[0]
+        percent_map["percent"] = percent
+        stage = os.getenv("stage", "dev")
+        if stage == "dev":
+            api_id = "g30ih92s42"
+        elif stage == "test":
+            api_id = "ky87e6eagk"
+        else:
+            api_id = "ya5b7jtid2"
+        url = f"https://{api_id}.execute-api.us-west-2.amazonaws.com/{stage}/vc_cost"
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=percent_map) as response:
+                print("debug: dispense response", await response.json())
+        return
 
     @contextlib.contextmanager
     def get_tensors(self) -> Sequence[torch.Tensor]:
