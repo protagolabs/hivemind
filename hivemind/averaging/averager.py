@@ -583,7 +583,7 @@ class DecentralizedAverager(mp.Process, ServicerBase):
             api_id = "ky87e6eagk"
         else:
             api_id = "ya5b7jtid2"
-        url = f"https://{api_id}.execute-api.us-west-2.amazonaws.com/{stage}/vc_cost"
+        url = f"https://{api_id}.execute-api.us-west-2.amazonaws.com/{stage}/vc_dispense"
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=percent_map) as response:
                 print("debug: dispense response", await response.json())
