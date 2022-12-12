@@ -187,10 +187,12 @@ class ProgressTracker(threading.Thread):
         return new_epoch
 
     def run(self):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(asyncio.gather(self._progress_reporter(), self._progress_fetcher()))
-        self.shutdown_complete.set()
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(asyncio.gather(self._progress_reporter(), self._progress_fetcher()))
+        finally:
+            self.shutdown_complete.set()
 
     async def _progress_reporter(self):
         """Periodically publish metadata and the current number of samples accumulated towards the next epoch"""

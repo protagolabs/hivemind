@@ -226,7 +226,7 @@ class TensorPartReducer:
                 logger.exception(f"find an illegal tensor, norm bias: {tensor_bias_norm}")
                 return False
         else:
-            print("accumulator is zero... 【this is not supposed to be seen】")
+            print("debug: accumulator is zero... this will only supposed to be seen after train finished")
         return True
 
     async def accumulate_part(

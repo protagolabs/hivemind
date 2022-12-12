@@ -9,10 +9,13 @@ import threading
 import weakref
 from dataclasses import asdict
 from typing import Any, AsyncIterator, Dict, Optional, Sequence, Tuple, Union
+import boto3
 
 import aiohttp
 import numpy as np
+import requests
 import torch
+from requests_aws4auth import AWS4Auth
 
 from hivemind.averaging.allreduce import AllreduceException, AllReduceRunner, AveragingMode, GroupID
 from hivemind.averaging.control import AveragingStage, StepControl
@@ -583,10 +586,16 @@ class DecentralizedAverager(mp.Process, ServicerBase):
             api_id = "ky87e6eagk"
         else:
             api_id = "ya5b7jtid2"
+        session = boto3.Session()
+        credentials = session.get_credentials()
+        awsauth = AWS4Auth(credentials.access_key, credentials.secret_key, 'us-west-2', "execute-api")
         url = f"https://{api_id}.execute-api.us-west-2.amazonaws.com/{stage}/vc_dispense"
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=percent_map) as response:
-                print("debug: dispense response", await response.json())
+        response = requests.post(url,json=percent_map,auth=awsauth)
+        logger.info(f"dispense response,{response.json()}")
+        # todo aiohttp only support BasicAuth, do self-design method for signing the URLs in Lambda server
+        # async with aiohttp.ClientSession() as session:
+        #     async with session.post(url, json=percent_map,auth=awsauth) as response:
+        #         print("debug: dispense response", await response.json())
         return
 
     @contextlib.contextmanager
