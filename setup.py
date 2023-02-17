@@ -122,7 +122,7 @@ class BuildPy(build_py):
         modules = super().find_package_modules(package, package_dir)
         filtered_modules = []
         for (pkg, mod, filepath) in modules:
-            if os.path.exists(filepath.replace('.py', ext_suffix)):
+            if os.path.exists(filepath.replace('.py', '.c')):
                 continue
             filtered_modules.append((pkg, mod, filepath, ))
         return filtered_modules
