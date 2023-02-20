@@ -1,5 +1,6 @@
 import time
 from argparse import ArgumentParser
+from secrets import token_hex
 
 from hivemind.dht import DHT, DHTNode
 from hivemind.utils.logging import get_logger, use_hivemind_log_handler
@@ -17,6 +18,9 @@ async def report_status(dht: DHT, node: DHTNode):
     logger.debug(f"Routing table contents: {node.protocol.routing_table}")
     logger.info(f"Local storage contains {len(node.protocol.storage)} keys")
     logger.debug(f"Local storage contents: {node.protocol.storage}")
+
+    # Contact peers and keep the routing table healthy (remove stale PeerIDs)
+    await node.get(f"heartbeat_{token_hex(16)}", latest=True)
 
 
 def main():
@@ -52,6 +56,17 @@ def main():
         "If the file does not exist, writes a new private key to this file.",
     )
     parser.add_argument(
+        "--no_relay",
+        action="store_false",
+        dest="use_relay",
+        help="Disable circuit relay functionality in libp2p (see https://docs.libp2p.io/concepts/nat/circuit-relay/)",
+    )
+    parser.add_argument(
+        "--use_auto_relay",
+        action="store_true",
+        help="Look for libp2p relays to become reachable if we are behind NAT/firewall",
+    )
+    parser.add_argument(
         "--refresh_period", type=int, default=30, help="Period (in seconds) for fetching the keys from DHT"
     )
 
@@ -64,6 +79,8 @@ def main():
         announce_maddrs=args.announce_maddrs,
         use_ipfs=args.use_ipfs,
         identity_path=args.identity_path,
+        use_relay=args.use_relay,
+        use_auto_relay=args.use_auto_relay,
     )
     log_visible_maddrs(dht.get_visible_maddrs(), only_p2p=args.use_ipfs)
 

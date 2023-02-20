@@ -104,6 +104,8 @@ class P2P:
         use_relay_hop: Optional[bool] = None,
         use_relay_discovery: Optional[bool] = None,
         check_if_identity_free: bool = True,
+        no_listen: bool = False,
+        trusted_relays: Optional[Sequence[Union[Multiaddr, str]]] = None,
     ) -> "P2P":
         """
         Start a new p2pd process and connect to it.
@@ -125,9 +127,13 @@ class P2P:
         :param relay_hop_limit: sets the hop limit for hop relays
         :param startup_timeout: raise a P2PDaemonError if the daemon does not start in ``startup_timeout`` seconds
         :param tls: Enables TLS1.3 channel security protocol
-        :param use_auto_relay: enables autorelay
         :param use_ipfs: Bootstrap to IPFS (incompatible with initial_peers)
-        :param use_relay: enables circuit relay
+        :param use_relay: Enable circuit relay functionality in libp2p
+                          (see https://docs.libp2p.io/concepts/nat/circuit-relay/).
+                          If enabled (default), you can reach peers behind NATs/firewalls through libp2p relays.
+                          If you are behind NAT/firewall yourself,
+                          please pass `use_auto_relay=True` to become reachable.
+        :param use_auto_relay: Look for libp2p relays to become reachable if we are behind NAT/firewall
         :param quic: Deprecated, has no effect since libp2p 0.17.0
         :param use_relay_hop: Deprecated, has no effect since libp2p 0.17.0
         :param use_relay_discovery: Deprecated, has no effect since libp2p 0.17.0
@@ -171,10 +177,12 @@ class P2P:
             ("bootstrapPeers", initial_peers),
             ("hostAddrs", host_maddrs),
             ("announceAddrs", announce_maddrs),
+            ("trustedRelays", trusted_relays),
         ]:
             if value:
                 process_kwargs[param] = self._maddrs_to_str(value)
-
+        if no_listen:
+            process_kwargs["noListenAddrs"] = 1
         if identity_path is not None:
             if os.path.isfile(identity_path):
                 if check_if_identity_free and need_bootstrap:

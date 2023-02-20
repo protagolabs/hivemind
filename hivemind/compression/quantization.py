@@ -1,4 +1,3 @@
-import importlib.util
 import math
 import os
 import warnings
@@ -9,12 +8,10 @@ from typing import Tuple
 import numpy as np
 import torch
 
-if importlib.util.find_spec("bitsandbytes") is not None:
-    warnings.filterwarnings("ignore", module="bitsandbytes", category=UserWarning)
-    from bitsandbytes.functional import quantize_blockwise, dequantize_blockwise
-
 from hivemind.compression.base import CompressionBase, CompressionInfo
 from hivemind.proto import runtime_pb2
+
+warnings.filterwarnings("ignore", module="bitsandbytes", category=UserWarning)
 
 EXECUTOR = ThreadPoolExecutor(max_workers=int(os.environ.get("QUANTIZATION_THREADS", 128)))
 
@@ -120,8 +117,8 @@ def quantile_qq_approximation(array: np.ndarray, n_quantiles: int, min_chunk_siz
     return np.quantile(partition_quantiles, quantiles)
 
 
-BNB_MISSING_MESSAGE = """BlockwiseQuantization requires bitsandbytes to function properly. 
-Please install it with `pip install bitsandbytes` 
+BNB_MISSING_MESSAGE = """BlockwiseQuantization requires bitsandbytes to function properly.
+Please install it with `pip install bitsandbytes`
 or using the instruction from https://github.com/TimDettmers/bitsandbytes."""
 
 
@@ -133,13 +130,21 @@ class BlockwiseQuantization(Quantization):
         self, tensor: torch.Tensor, allow_inplace: bool = False
     ) -> Tuple[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
         try:
-            quantized, (absmax, codebook) = quantize_blockwise(tensor)
-        except NameError:
+            # This runs actual import only on the 1st call, copies references after that
+            from bitsandbytes.functional import quantize_blockwise
+        except ImportError:
             raise ImportError(BNB_MISSING_MESSAGE)
+
+        quantized, (absmax, codebook) = quantize_blockwise(tensor)
         return quantized.numpy(), (absmax.numpy(), codebook.numpy())
 
     def compress(self, tensor: torch.Tensor, info: CompressionInfo, allow_inplace: bool = False) -> runtime_pb2.Tensor:
-        quantized, (absmax, codebook) = self.quantize(tensor.detach(), allow_inplace=allow_inplace)
+        tensor = tensor.detach()
+        dtype_name = str(tensor.dtype).lstrip("torch.")
+        if tensor.dtype == torch.bfloat16:
+            tensor = tensor.to(torch.float32)
+
+        quantized, (absmax, codebook) = self.quantize(tensor, allow_inplace=allow_inplace)
 
         serialized_data = (
             np.int64(len(absmax)).tobytes(),
@@ -153,11 +158,16 @@ class BlockwiseQuantization(Quantization):
             buffer=b"".join(serialized_data),
             size=tensor.shape,
             requires_grad=tensor.requires_grad,
-            dtype=tensor.numpy().dtype.name,
+            dtype=dtype_name,
             compression=self.compression_type,
         )
 
     def extract(self, serialized_tensor: runtime_pb2.Tensor) -> torch.Tensor:
+        try:
+            from bitsandbytes.functional import dequantize_blockwise
+        except ImportError:
+            raise ImportError(BNB_MISSING_MESSAGE)
+
         absmax_size = int(np.frombuffer(serialized_tensor.buffer, count=1, dtype=np.int64))
         codebook_size = int(np.frombuffer(serialized_tensor.buffer, offset=8, count=1, dtype=np.int64))
         absmax = np.frombuffer(serialized_tensor.buffer, offset=16, count=absmax_size, dtype=self.codebook_dtype)
@@ -171,7 +181,6 @@ class BlockwiseQuantization(Quantization):
         absmax = torch.as_tensor(absmax)
         codebook = torch.as_tensor(codebook)
         quantized = torch.as_tensor(quantized).reshape(tuple(serialized_tensor.size))
-        try:
-            return dequantize_blockwise(quantized, (absmax, codebook))
-        except NameError:
-            raise ImportError(BNB_MISSING_MESSAGE)
+        result = dequantize_blockwise(quantized, (absmax, codebook))  # Always returns a float32 tensor
+        result = result.to(dtype=getattr(torch, serialized_tensor.dtype))
+        return result
