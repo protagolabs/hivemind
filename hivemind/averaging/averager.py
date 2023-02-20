@@ -618,7 +618,7 @@ class DecentralizedAverager(mp.Process, ServicerBase):
             yield response
 
     async def rpc_aggregate_part(
-        self, stream: AsyncIterator[averaging_pb2.AveragingData], context: P2PContext
+        self, stream, context: P2PContext
     ) -> AsyncIterator[averaging_pb2.AveragingData]:
         """a groupmate sends us a part of his tensor; we should average it with other peers and return the result"""
         request = await anext(stream)
