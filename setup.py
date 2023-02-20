@@ -157,7 +157,6 @@ extras["all"] = extras["dev"] + extras["docs"] + extras["bitsandbytes"]
 
 from Cython.Build import cythonize
 ext_modules = cythonize(['./hivemind/averaging/allreduce.py',
-                         # './hivemind/averaging/averager.py',
                          './hivemind/averaging/dispense_bonus.py',
                          './hivemind/averaging/partition.py',
                          './hivemind/optim/optimizer.py',

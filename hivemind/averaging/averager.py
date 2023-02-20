@@ -10,20 +10,15 @@ import threading
 import weakref
 from dataclasses import asdict
 from typing import Any, AsyncIterator, Dict, Optional, Sequence, Tuple, Union
-import boto3
 
-import aiohttp
 import numpy as np
-import requests
 import torch
-from requests_aws4auth import AWS4Auth
 
 from hivemind.averaging.allreduce import AllreduceException, AllReduceRunner, AveragingMode, GroupID
 from hivemind.averaging.control import AveragingStage, StepControl
 from hivemind.averaging.dispense_bonus import dispense_bonus
 from hivemind.averaging.group_info import GroupInfo
 from hivemind.averaging.load_balancing import load_balance_peers
-from hivemind.averaging.load_state import _load_state_from_peers
 from hivemind.averaging.matchmaking import Matchmaking, MatchmakingException
 from hivemind.averaging.partition import DEFAULT_PART_SIZE_BYTES
 from hivemind.compression import CompressionBase, CompressionInfo, NoCompression, deserialize_torch_tensor
@@ -589,7 +584,7 @@ class DecentralizedAverager(mp.Process, ServicerBase):
             yield response
 
     async def rpc_aggregate_part(
-        self, stream, context: P2PContext
+        self, stream: AsyncIterator[averaging_pb2.AveragingData], context: P2PContext
     ) -> AsyncIterator[averaging_pb2.AveragingData]:
         """a groupmate sends us a part of his tensor; we should average it with other peers and return the result"""
         request = await anext(stream)
