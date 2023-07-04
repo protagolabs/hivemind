@@ -12,7 +12,7 @@ configargparse>=1.2.3
 multiaddr>=0.0.9
 pymultihash>=0.8.2
 cryptography>=3.4.6
-pydantic>=1.8.1
+pydantic==1.8.1
 cython>=0.29.32
 boto3==1.26.17
 requests_aws4auth==1.1.2
