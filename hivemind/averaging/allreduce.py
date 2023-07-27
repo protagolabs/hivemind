@@ -383,7 +383,7 @@ class AllReduceRunner(ServicerBase):
             print(f"weight > total weight   target:{self.target_batch_size}, weight:{self.weight}")
             raise TensorIllegalException
         elif weight / 2 >= (self.target_batch_size - self.weight) / (len(self.sender_peer_ids) - 1):
-            logger.warning(f"{peer_p2p_id} give us a very high weight")
+            logger.warning(f"{peer_p2p_id} give us a very high weight （2*average）")
 
 
     def finalize(self, *, cancel: bool = False, exception: Optional[BaseException] = None):
