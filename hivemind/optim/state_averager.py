@@ -536,6 +536,15 @@ class TrainingStateAverager(DecentralizedAverager):
                         gathered = averaging_control.result(timeout=timeout)
                         logger.log(self.status_loglevel, f"Averaged parameters with {len(gathered)} peers")
                     except BaseException as e:
+                        extra = "_state_averager"
+                        if self.prefix and len(self.prefix) >= len(extra):
+                            run_id = self.prefix[:-len(extra)]
+                            self.dht.store(
+                                key=run_id + "_check",
+                                value={"id": run_id, "status": "failed"},
+                                expiration_time=time.time() + (60 * 10),
+                                return_future=True,
+                            )
                         logger.log(self.status_loglevel, f"Averaging failed with {type(e)}")
                         gathered = {}
 

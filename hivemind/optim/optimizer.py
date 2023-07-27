@@ -605,7 +605,7 @@ class Optimizer(torch.optim.Optimizer):
             self.dht.store(
                 key=self.run_id + "_check",
                 value={"id": self.run_id, "status": "failed"},
-                expiration_time=time.time() + (60 * 60),
+                expiration_time=time.time() + (60 * 10),
                 return_future=True,
             )
             logger.log(self.status_loglevel, f"Averaging gradients failed with {repr(e)} in optimizer")
